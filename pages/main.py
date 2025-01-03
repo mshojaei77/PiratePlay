@@ -12,6 +12,7 @@ from pages.player import PlayerWidget
 from pages.news import NewsWidget
 from dialogs.profile import StreamingProfileDialog
 from pages.search_results import SearchResultsWidget
+from pages.selected_movie import SelectedMovie
 import functools
 from services.tmdb import TMDBService
 from utils.logger import app_logger
@@ -72,7 +73,8 @@ class MainWindow(QWidget):
                 'player': PlayerWidget(self),
                 'news': NewsWidget(self),
                 'settings': SettingsWidget(self),
-                'search_results': SearchResultsWidget(self)
+                'search_results': SearchResultsWidget(self),
+                'selected_movie': SelectedMovie(self)
             }
             
             # Add pages to stack and store indices
@@ -206,3 +208,15 @@ class MainWindow(QWidget):
                     app_logger.debug("Search cleared, returning to home page")
         except Exception as e:
             app_logger.error(f"Failed to handle search: {str(e)}")
+    
+    def show_selected_movie(self, movie_name):
+        """Navigate to the selected movie page and display movie details"""
+        # self.app.show_selected_movie(movie_name)
+        try:
+            # Update the selected movie page with the movie data
+            self.pages['selected_movie'].show_selected_movie(movie_name)
+            # Navigate to the selected movie page
+            self._navigate_to_page('selected_movie')
+            app_logger.info(f"Showing selected movie: {movie_name}")
+        except Exception as e:
+            app_logger.error(f"Failed to show selected movie: {str(e)}")

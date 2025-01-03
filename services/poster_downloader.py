@@ -40,8 +40,26 @@ class PosterDownloader:
 
     def get_posters_by_name(self, movie_name: str) -> bytes:
         """Get movie poster image data, trying all sources concurrently until first success"""
-        # Create cache filename
-        cache_file = self.cache_dir / f"{movie_name.replace(' ', '_')}.jpg"
+        # Extract year and clean movie name
+        movie_year_match = re.search(r'\((\d{4})\)', movie_name)
+        clean_name = movie_name
+        year = None
+        
+        if movie_year_match:
+            year = movie_year_match.group(1)
+            clean_name = re.sub(r'\(\d{4}\)', '', movie_name).strip()
+
+        # Create cache filename with sanitized name and year
+        cache_filename = clean_name.lower()  # Convert to lowercase
+        cache_filename = re.sub(r'[^\w\-_\. ]', '', cache_filename)  # Remove special chars
+        cache_filename = re.sub(r'\s+', '_', cache_filename)  # Replace spaces with underscore
+        cache_filename = re.sub(r'_{2,}', '_', cache_filename)  # Remove multiple underscores
+        cache_filename = cache_filename.strip('_')  # Remove leading/trailing underscores
+        
+        if year:
+            cache_filename = f"{cache_filename}_{year}"
+        
+        cache_file = self.cache_dir / f"{cache_filename}.jpg"
 
         # Check file cache first
         if cache_file.exists():
@@ -66,15 +84,15 @@ class PosterDownloader:
         ]
 
         poster_data = None
+        # Create a new executor for each call to avoid shutdown issues
         with ThreadPoolExecutor(max_workers=len(sources)) as executor:
-            future_to_source = {
-                executor.submit(source, name): source.__name__ 
-                for source, name in sources
-            }
+            futures = []
+            for source, name in sources:
+                if not self._shutdown_event.is_set():
+                    futures.append(executor.submit(source, name))
 
             try:
-                for future in as_completed(future_to_source):
-                    source_name = future_to_source[future]
+                for future in as_completed(futures):
                     try:
                         poster_url = future.result()
                         if poster_url and self._is_valid_image_url(poster_url):
@@ -86,14 +104,14 @@ class PosterDownloader:
                                 cache_file.write_bytes(poster_data)
                                 # Save to memory cache
                                 self._cache[cache_key] = poster_data
-                                self._shutdown_event.set()
                                 break
                     except Exception as e:
-                        app_logger.debug(f"Error getting poster from {source_name}: {str(e)}")
+                        app_logger.debug(f"Error getting poster: {str(e)}")
+                        continue
 
             finally:
-                # Cancel remaining futures
-                for future in future_to_source:
+                # Cancel any remaining futures
+                for future in futures:
                     if not future.done():
                         future.cancel()
 

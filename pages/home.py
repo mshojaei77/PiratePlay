@@ -1,6 +1,6 @@
 from pages.base_page import BasePageWidget
 from views.home_ui import Ui_HomeWidget
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QFrame
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 import requests
@@ -12,6 +12,18 @@ import asyncio
 from functools import partial
 from utils.logger import app_logger
 from services.poster_downloader import PosterDownloader
+
+class ClickableMovieContainer(QFrame):
+    def __init__(self, parent=None, movie_name=None, click_handler=None):
+        super().__init__(parent)
+        self.movie_name = movie_name
+        self.click_handler = click_handler
+        self.setStyleSheet("QFrame:hover { background-color: #34495e; border-radius: 5px; }")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.click_handler and self.movie_name:
+            self.click_handler(self.movie_name)
 
 class HomeWidget(BasePageWidget):
     def __init__(self, app):
@@ -45,8 +57,8 @@ class HomeWidget(BasePageWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         
         for i in range(items_count):
-            # Create container widget for poster and title
-            container = QWidget()
+            # Create clickable container widget for poster and title
+            container = ClickableMovieContainer(click_handler=lambda name: self.app.show_selected_movie(name))
             container_layout = QVBoxLayout(container)
             container_layout.setSpacing(5)
             container_layout.setContentsMargins(5, 5, 5, 5)
@@ -85,34 +97,38 @@ class HomeWidget(BasePageWidget):
         title_label = container.findChildren(QLabel)[-1]
         title_label.setText(movie_title)
 
-        try:
-            # Get poster data directly as bytes
-            poster_data = self.poster_downloader.get_posters_by_name(movie_title)
-            
-            if not poster_data:
-                app_logger.debug(f"No poster found for movie: {movie_title}")
-                return
+        def load_and_set_poster():
+            try:
+                # Get poster data directly as bytes
+                poster_data = self.poster_downloader.get_posters_by_name(movie_title)
+                
+                if not poster_data:
+                    app_logger.debug(f"No poster found for movie: {movie_title}")
+                    return
 
-            # Create QPixmap from image data
-            pixmap = QPixmap()
-            if pixmap.loadFromData(poster_data):
-                scaled_pixmap = pixmap.scaled(
-                    150, 225,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                
-                if not scaled_pixmap.isNull():
-                    poster_label = container.findChild(QLabel)
-                    poster_label.setPixmap(scaled_pixmap)
-                    app_logger.debug(f"Successfully loaded poster for: {movie_title}")
+                # Create QPixmap from image data
+                pixmap = QPixmap()
+                if pixmap.loadFromData(poster_data):
+                    scaled_pixmap = pixmap.scaled(
+                        150, 225,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                    
+                    if not scaled_pixmap.isNull():
+                        poster_label = container.findChild(QLabel)
+                        poster_label.setPixmap(scaled_pixmap)
+                        app_logger.debug(f"Successfully loaded poster for: {movie_title}")
+                    else:
+                        raise ValueError("Failed to scale pixmap")
                 else:
-                    raise ValueError("Failed to scale pixmap")
-            else:
-                raise ValueError("Failed to load pixmap from image data")
-                
-        except Exception as e:
-            app_logger.error(f"Error loading poster for {movie_title}: {str(e)}")
+                    raise ValueError("Failed to load pixmap from image data")
+                    
+            except Exception as e:
+                app_logger.error(f"Error loading poster for {movie_title}: {str(e)}")
+
+        # Submit poster loading task to thread pool
+        self.thread_pool.submit(load_and_set_poster)
 
     def _load_trending_movies(self):
         try:
@@ -129,6 +145,8 @@ class HomeWidget(BasePageWidget):
                     
                 container = layout.itemAt(i).widget()
                 if container:
+                    # Set the movie name for the clickable container
+                    container.movie_name = movie.get('title', 'Unknown')
                     self.thread_pool.submit(self._load_poster, movie, container)
                     
         except Exception as e:
