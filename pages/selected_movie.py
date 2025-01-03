@@ -8,8 +8,9 @@ class SelectedMovie(QWidget):
         self.ui.setupUi(self)
         self.current_movie = None
 
-    def show_selected_movie(self, movie_name):
+    def show_selected_movie(self, movie_name, movie_id):
         print(movie_name)
+        print(movie_id)
         pass
 
 

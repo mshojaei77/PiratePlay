@@ -209,12 +209,12 @@ class MainWindow(QWidget):
         except Exception as e:
             app_logger.error(f"Failed to handle search: {str(e)}")
     
-    def show_selected_movie(self, movie_name):
+    def show_selected_movie(self, movie_name, movie_id):
         """Navigate to the selected movie page and display movie details"""
         # self.app.show_selected_movie(movie_name)
         try:
             # Update the selected movie page with the movie data
-            self.pages['selected_movie'].show_selected_movie(movie_name)
+            self.pages['selected_movie'].show_selected_movie(movie_name, movie_id)
             # Navigate to the selected movie page
             self._navigate_to_page('selected_movie')
             app_logger.info(f"Showing selected movie: {movie_name}")

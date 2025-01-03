@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import os
 from pathlib import Path
+from services.tmdb import TMDBService
 
 app_logger = logging.getLogger(__name__)
 app_logger.setLevel(logging.DEBUG)
@@ -38,26 +39,34 @@ class PosterDownloader:
         self.cache_dir = Path("cache/posters")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        self.tmdb_service = TMDBService(self.TMDB_API_KEY)
+
     def get_posters_by_name(self, movie_name: str) -> bytes:
         """Get movie poster image data, trying all sources concurrently until first success"""
-        # Extract year and clean movie name
-        movie_year_match = re.search(r'\((\d{4})\)', movie_name)
-        clean_name = movie_name
-        year = None
+        # Get movie ID from TMDB first
+        movie_id = self.tmdb_service.get_movie_id_by_name(movie_name)
         
-        if movie_year_match:
-            year = movie_year_match.group(1)
-            clean_name = re.sub(r'\(\d{4}\)', '', movie_name).strip()
+        # Create cache key using both name and ID
+        cache_key = f"poster_{movie_name}_{movie_id}" if movie_id else f"poster_{movie_name}"
+        
+        # Check memory cache with new key
+        if cache_key in self._cache:
+            return self._cache[cache_key]
 
-        # Create cache filename with sanitized name and year
+        # Extract year and clean movie name
+
+        clean_name = movie_name
+
+        # Create cache filename with sanitized name and movie ID
         cache_filename = clean_name.lower()  # Convert to lowercase
         cache_filename = re.sub(r'[^\w\-_\. ]', '', cache_filename)  # Remove special chars
         cache_filename = re.sub(r'\s+', '_', cache_filename)  # Replace spaces with underscore
         cache_filename = re.sub(r'_{2,}', '_', cache_filename)  # Remove multiple underscores
         cache_filename = cache_filename.strip('_')  # Remove leading/trailing underscores
         
-        if year:
-            cache_filename = f"{cache_filename}_{year}"
+        # Add movie ID to filename if available
+        if movie_id:
+            cache_filename = f"{cache_filename}_{movie_id}"
         
         cache_file = self.cache_dir / f"{cache_filename}.jpg"
 
@@ -65,31 +74,29 @@ class PosterDownloader:
         if cache_file.exists():
             return cache_file.read_bytes()
 
-        # Check memory cache
-        cache_key = f"poster_{movie_name}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
         movie_name_encoded = quote(movie_name)
         movie_name_rt = movie_name.replace(" ", "_")
 
-        # Expanded sources list to include all methods
+        # Pass both name and ID to source methods
         sources = [
-            (self._get_tmdb_api_poster_url, movie_name),
-            (self._get_fanart_poster_url, movie_name),
-            (self._get_yts_poster_url, movie_name),
-            (self._get_rt_poster, movie_name_rt),
-            (self._get_tmdb_poster, movie_name_encoded),
-            (self._get_imdb_poster, movie_name_encoded),
+            (self._get_tmdb_api_poster_url, (movie_name, movie_id)),
+            (self._get_fanart_poster_url, (movie_name, movie_id)),
+            (self._get_yts_poster_url, (movie_name, movie_id)),
+            (self._get_rt_poster, movie_name_rt),  # RT uses name-based URLs
+            (self._get_tmdb_poster, movie_name_encoded),  # Web scraping still uses name
+            (self._get_imdb_poster, movie_name_encoded),  # Web scraping still uses name
         ]
 
         poster_data = None
         # Create a new executor for each call to avoid shutdown issues
         with ThreadPoolExecutor(max_workers=len(sources)) as executor:
             futures = []
-            for source, name in sources:
+            for source, params in sources:
                 if not self._shutdown_event.is_set():
-                    futures.append(executor.submit(source, name))
+                    if isinstance(params, tuple):
+                        futures.append(executor.submit(source, *params))
+                    else:
+                        futures.append(executor.submit(source, params))
 
             try:
                 for future in as_completed(futures):
@@ -115,6 +122,42 @@ class PosterDownloader:
                     if not future.done():
                         future.cancel()
 
+        return poster_data if poster_data else bytes()
+    
+    def get_tv_posters_by_name(self, tv_name: str) -> bytes:
+        """Get TV show poster image data, trying all sources concurrently until first success"""
+        # Get TV show ID from TMDB first
+        tv_id = self.tmdb_service.get_tv_id_by_name(tv_name)
+
+        # Create cache key using both name and ID
+        cache_key = f"tv_poster_{tv_name}_{tv_id}" if tv_id else f"tv_poster_{tv_name}"
+        
+        # Check memory cache with new key
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Create cache filename with sanitized name and TV ID
+        cache_filename = self._sanitize_filename(tv_name, tv_id)
+        cache_file = self.cache_dir / f"{cache_filename}.jpg"
+
+        # Check file cache first
+        if cache_file.exists():
+            return cache_file.read_bytes()
+
+        tv_name_encoded = quote(tv_name)
+        tv_name_rt = tv_name.replace(" ", "_")
+
+        # Define sources to try (expanded with more TV-specific endpoints)
+        sources = [
+            (self._get_tmdb_tv_api_poster_url, (tv_name, tv_id)),  # Direct TMDB API call
+            (self._get_fanart_tv_poster_url, (tv_name, tv_id)),    # Fanart.tv TV endpoint
+            (self._get_rt_tv_poster, tv_name_rt),                  # RT TV endpoint
+            (self._get_tvdb_poster_url, tv_name_encoded),          # TVDB fallback
+            (self._get_imdb_tv_poster, tv_name_encoded),          # IMDB TV fallback
+            (self._get_tmdb_poster, tv_name_encoded),             # Web scraping fallback
+        ]
+
+        poster_data = self._try_sources_concurrently(sources, cache_file, cache_key)
         return poster_data if poster_data else bytes()
 
     def _is_valid_image_url(self, url: str) -> bool:
@@ -281,17 +324,23 @@ class PosterDownloader:
         
         return ""
 
-    def _get_yts_poster_url(self, movie_name: str) -> str:
+    def _get_yts_poster_url(self, movie_name: str, movie_id: int = None) -> str:
         """Helper method to get single URL from YTS"""
+        # YTS API doesn't support TMDB IDs, so we still use movie name
         result = self.get_yts_poster(movie_name)
         if result and result.get("large"):
             return result["large"]
         return ""
 
-    def _get_tmdb_api_poster_url(self, movie_name: str) -> str:
+    def _get_tmdb_api_poster_url(self, movie_name: str, movie_id: int = None) -> str:
         """Helper method to get single URL from TMDB API"""
         if self._should_stop():
             return ""
+        if movie_id:
+            # Use movie_id directly if available
+            movie_details = self.tmdb_service.get_movie_details(movie_id)
+            if movie_details and "poster_path" in movie_details:
+                return f"{self.tmdb_service.POSTER_BASE_URL}{movie_details['poster_path']}"
         return self.get_tmdb_api_poster(movie_name, self.TMDB_API_KEY)
 
     def _get_tmdb_movie_id(self, movie_name: str) -> str:
@@ -314,18 +363,172 @@ class PosterDownloader:
         
         return ""
 
-    def _get_fanart_poster_url(self, movie_name: str) -> str:
+    def _get_fanart_poster_url(self, movie_name: str, movie_id: int = None) -> str:
         """Helper method to get single URL from Fanart.tv"""
         if self._should_stop():
             return ""
-        movie_id = self._get_tmdb_movie_id(movie_name)
-        if not movie_id:
+        tmdb_id = str(movie_id) if movie_id else self._get_tmdb_movie_id(movie_name)
+        if not tmdb_id:
             return ""
-        posters = self.get_fanart_posters(movie_id)
+        posters = self.get_fanart_posters(tmdb_id)
         return posters[0] if posters else ""
 
     def _should_stop(self) -> bool:
         return self._shutdown_event.is_set()
+
+    def _get_fanart_tv_poster_url(self, tv_name: str, tv_id: int = None) -> str:
+        """Get TV show poster from Fanart.tv"""
+        if self._should_stop():
+            return ""
+        if not tv_id:
+            return ""
+        
+        BASE_URL = "http://webservice.fanart.tv/v3/"
+        url = f"{BASE_URL}tv/{tv_id}"
+        
+        try:
+            response = self.session.get(
+                url,
+                params={'api_key': self.FANART_API_KEY}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'tvposter' in data and data['tvposter']:
+                # Sort by likes and language preference
+                posters = sorted(
+                    data['tvposter'],
+                    key=lambda x: (x.get('lang') == 'en', int(x.get('likes', 0))),
+                    reverse=True
+                )
+                return posters[0]['url']
+        except Exception as e:
+            app_logger.debug(f"Error getting Fanart.tv TV poster: {str(e)}")
+        
+        return ""
+
+    def _get_rt_tv_poster(self, tv_name_underscore: str) -> str:
+        """Get TV show poster from Rotten Tomatoes"""
+        rt_url = f"https://www.rottentomatoes.com/tv/{tv_name_underscore}"
+        try:
+            response = self.session.get(rt_url)
+            if not response.ok:
+                return ""
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            meta_img = soup.find('meta', {'property': 'og:image'})
+            if meta_img and meta_img.get('content'):
+                content = meta_img['content']
+                if 'flixster.com' in content:
+                    base_url = content.split('/v2/')[1] if '/v2/' in content else content
+                    return f"https://resizing.flixster.com/{base_url}"
+        except Exception as e:
+            app_logger.debug(f"Error getting RT TV poster: {str(e)}")
+        
+        return ""
+
+    def _get_tmdb_tv_api_poster_url(self, tv_name: str, tv_id: int = None) -> str:
+        """Get TV show poster directly from TMDB API"""
+        if self._should_stop():
+            return ""
+        try:
+            if tv_id:
+                # Use TV ID directly if available
+                details = self.tmdb_service.get_tv_details(tv_id)
+                if details and "poster_path" in details:
+                    return f"{self.tmdb_service.POSTER_BASE_URL}{details['poster_path']}"
+            
+            # Fallback to search if no ID or no results
+            search_url = f"{self.TMDB_BASE_URL}search/tv"
+            response = self.session.get(
+                search_url,
+                params={
+                    "api_key": self.TMDB_API_KEY,
+                    "query": tv_name
+                }
+            )
+            data = response.json()
+            if data.get("results"):
+                poster_path = data["results"][0].get("poster_path")
+                if poster_path:
+                    return f"{self.tmdb_service.POSTER_BASE_URL}{poster_path}"
+        except Exception as e:
+            app_logger.debug(f"Error getting TMDB TV poster: {str(e)}")
+        return ""
+
+    def _get_tvdb_poster_url(self, tv_name: str) -> str:
+        """Get TV show poster from TVDB"""
+        try:
+            search_url = f"https://thetvdb.com/search?query={tv_name}"
+            response = self.session.get(search_url)
+            if response.ok:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                poster = soup.select_one('.thumbnail img')
+                if poster and poster.get('src'):
+                    return urljoin("https://thetvdb.com", poster['src'])
+        except Exception as e:
+            app_logger.debug(f"Error getting TVDB poster: {str(e)}")
+        return ""
+
+    def _get_imdb_tv_poster(self, tv_name: str) -> str:
+        """Get TV show poster from IMDB"""
+        try:
+            # Add "TV series" to search query to prioritize TV results
+            imdb_search_url = f"https://www.imdb.com/find?q={tv_name}+TV+series"
+            response = self.session.get(imdb_search_url)
+            if response.ok:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                # Look specifically for TV series results
+                first_result = soup.find('a', class_='ipc-metadata-list-summary-item__t', 
+                                       href=lambda x: x and '/title/tt' in x)
+                if first_result:
+                    show_id_match = re.search(r'/title/(tt\d+)/', first_result['href'])
+                    if show_id_match:
+                        return f"https://m.media-amazon.com/images/M/{show_id_match.group(1)}@._V1_SX300.jpg"
+        except Exception as e:
+            app_logger.debug(f"Error getting IMDB TV poster: {str(e)}")
+        return ""
+
+    def _sanitize_filename(self, name: str, id: int = None) -> str:
+        """Helper method to create sanitized cache filenames"""
+        filename = name.lower()
+        filename = re.sub(r'[^\w\-_\. ]', '', filename)
+        filename = re.sub(r'\s+', '_', filename)
+        filename = re.sub(r'_{2,}', '_', filename)
+        filename = filename.strip('_')
+        return f"{filename}_{id}" if id else filename
+
+    def _try_sources_concurrently(self, sources, cache_file, cache_key):
+        """Helper method to try multiple sources concurrently"""
+        poster_data = None
+        with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+            futures = []
+            for source, params in sources:
+                if not self._shutdown_event.is_set():
+                    if isinstance(params, tuple):
+                        futures.append(executor.submit(source, *params))
+                    else:
+                        futures.append(executor.submit(source, params))
+
+            try:
+                for future in as_completed(futures):
+                    try:
+                        poster_url = future.result()
+                        if poster_url and self._is_valid_image_url(poster_url):
+                            response = self.session.get(poster_url, stream=True)
+                            if response.ok:
+                                poster_data = response.content
+                                cache_file.write_bytes(poster_data)
+                                self._cache[cache_key] = poster_data
+                                break
+                    except Exception as e:
+                        app_logger.debug(f"Error getting TV poster: {str(e)}")
+                        continue
+            finally:
+                for future in futures:
+                    if not future.done():
+                        future.cancel()
+        return poster_data
 
 if __name__ == "__main__":
     # Example usage of the PosterDownloader
@@ -334,4 +537,17 @@ if __name__ == "__main__":
     # Test with a popular movie
     movie_name = "The Shawshank Redemption"
     poster_data = scraper.get_posters_by_name(movie_name)
-    print(poster_data)
+    if poster_data:
+        print(f"Successfully retrieved movie poster for '{movie_name}'")
+        # Save to test file
+        with open("test_movie_poster.jpg", "wb") as f:
+            f.write(poster_data)
+    
+    # Test with a popular TV show
+    tv_name = "Breaking Bad"
+    tv_poster_data = scraper.get_tv_posters_by_name(tv_name)
+    if tv_poster_data:
+        print(f"Successfully retrieved TV poster for '{tv_name}'")
+        # Save to test file
+        with open("test_tv_poster.jpg", "wb") as f:
+            f.write(tv_poster_data)

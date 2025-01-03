@@ -37,12 +37,6 @@ class TMDBService:
         return self._make_request("trending/tv/week", params={"page": str(page)})
 
     @lru_cache(maxsize=128)
-    def get_trending_anime(self, page: int = 1) -> List[Dict]:
-        """Get trending anime shows by filtering TV results"""
-        return self._make_request("trending/tv/week", 
-                                params={"page": str(page), "with_original_language": "ja"})
-
-    @lru_cache(maxsize=128)
     def get_new_episodes(self, show_ids: List[int]) -> List[Dict]:
         """Get new episodes for shows user is watching"""
         episodes = []
@@ -79,13 +73,22 @@ class TMDBService:
         return urljoin(self.POSTER_BASE_URL, poster_path)
 
     @lru_cache(maxsize=128)
-    def get_movie_poster_by_name(self, movie_name: str) -> str:
-        """Get movie poster URL by movie name"""
+    def get_movie_poster_by_name(self, movie_name: str) -> tuple[str, int]:
+        """Get movie poster URL and ID by movie name"""
         search_results = self._make_request("search/movie", params={"query": movie_name})
         if search_results and "results" in search_results and search_results["results"]:
             movie = search_results["results"][0]  # Get first match
-            if "poster_path" in movie:
-                return self.get_poster_url(movie["poster_path"])
+            movie_id = movie.get("id", 0)
+            poster_path = movie.get("poster_path", "")
+            return (self.get_poster_url(poster_path), movie_id)
+        return ("", 0)
+
+    @lru_cache(maxsize=128)
+    def get_movie_poster_by_id(self, movie_id: int) -> str:
+        """Get movie poster URL directly by ID"""
+        movie_details = self.get_movie_details(movie_id)
+        if movie_details and "poster_path" in movie_details:
+            return self.get_poster_url(movie_details["poster_path"])
         return ""
 
     @lru_cache(maxsize=128)
@@ -106,6 +109,24 @@ class TMDBService:
                 return movie["id"]
         return 0
 
+    @lru_cache(maxsize=128)
+    def get_tv_id_by_name(self, tv_name: str) -> int:
+        """Get TV show ID by show name"""
+        search_results = self._make_request("search/tv", params={"query": tv_name})
+        if search_results and "results" in search_results and search_results["results"]:
+            show = search_results["results"][0]  # Get first match
+            if "id" in show:
+                return show["id"]
+        return 0
+
+    @lru_cache(maxsize=128)
+    def get_tv_poster_by_id(self, tv_id: int) -> str:
+        """Get TV show poster URL directly by ID"""
+        tv_details = self.get_tv_details(tv_id)
+        if tv_details and "poster_path" in tv_details:
+            return self.get_poster_url(tv_details["poster_path"])
+        return ""
+
 # Usage example
 if __name__ == "__main__":
     # Initialize service
@@ -124,13 +145,6 @@ if __name__ == "__main__":
     if "results" in trending_tv:
         for show in trending_tv["results"]:  # Removed [:3]
             print(f"Show: {show.get('name')} ({show.get('first_air_date', 'N/A')})")
-    
-    # Test trending anime
-    print("\n=== Trending Anime ===")
-    trending_anime = tmdb.get_trending_anime()
-    if "results" in trending_anime:
-        for anime in trending_anime["results"]:  # Removed [:20]
-            print(f"Anime: {anime.get('name')} ({anime.get('first_air_date', 'N/A')})")
     
     # Test search
     print("\n=== Search Results ===")
@@ -163,3 +177,12 @@ if __name__ == "__main__":
     movie_name = "The Matrix"
     poster_url = tmdb.get_movie_poster_by_name(movie_name)
     print(f"Poster URL for {movie_name}: {poster_url}")
+    
+    # Test TV show ID and poster lookup
+    print("\n=== TV Show ID and Poster Lookup ===")
+    show_name = "Breaking Bad"
+    show_id = tmdb.get_tv_id_by_name(show_name)
+    print(f"TV Show ID for {show_name}: {show_id}")
+    
+    poster_url = tmdb.get_tv_poster_by_id(show_id)
+    print(f"Poster URL for {show_name}: {poster_url}")

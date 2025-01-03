@@ -12,18 +12,19 @@ import asyncio
 from functools import partial
 from utils.logger import app_logger
 from services.poster_downloader import PosterDownloader
-
+from services.myanimelist import MyAnimeListService
 class ClickableMovieContainer(QFrame):
-    def __init__(self, parent=None, movie_name=None, click_handler=None):
+    def __init__(self, parent=None, movie_name=None, movie_id=None, click_handler=None):
         super().__init__(parent)
         self.movie_name = movie_name
+        self.movie_id = movie_id
         self.click_handler = click_handler
         self.setStyleSheet("QFrame:hover { background-color: #34495e; border-radius: 5px; }")
         self.setCursor(Qt.PointingHandCursor)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.click_handler and self.movie_name:
-            self.click_handler(self.movie_name)
+        if event.button() == Qt.LeftButton and self.click_handler:
+            self.click_handler(self.movie_name, self.movie_id)
 
 class HomeWidget(BasePageWidget):
     def __init__(self, app):
@@ -33,6 +34,7 @@ class HomeWidget(BasePageWidget):
         
         # Initialize TMDB service
         self.tmdb = TMDBService()
+        self.myanimelist = MyAnimeListService()
         
         # Initialize content areas with grid layouts
         self._setup_content_area(self.ui.currentWatchingContent)
@@ -58,7 +60,9 @@ class HomeWidget(BasePageWidget):
         
         for i in range(items_count):
             # Create clickable container widget for poster and title
-            container = ClickableMovieContainer(click_handler=lambda name: self.app.show_selected_movie(name))
+            container = ClickableMovieContainer(
+                click_handler=lambda name, id: self.app.show_selected_movie(name, id)  # Updated lambda to accept both parameters
+            )
             container_layout = QVBoxLayout(container)
             container_layout.setSpacing(5)
             container_layout.setContentsMargins(5, 5, 5, 5)
@@ -90,20 +94,25 @@ class HomeWidget(BasePageWidget):
         super().on_page_activate()
         # Load content after page activation
         self._load_trending_movies()
+        self._load_trending_series()
+        self._load_trending_anime()
 
     def _load_poster(self, movie, container):
-        movie_title = movie.get('title', 'Unknown')
-        # Set the title immediately, regardless of poster status
+        movie_title = movie.get('title') or movie.get('name', 'Unknown')
+        movie_id = movie.get('id')
+        
+        # Set the title and ID immediately
         title_label = container.findChildren(QLabel)[-1]
         title_label.setText(movie_title)
+        container.movie_id = movie_id
 
         def load_and_set_poster():
             try:
-                # Get poster data directly as bytes
+                # Get poster data using both name and ID
                 poster_data = self.poster_downloader.get_posters_by_name(movie_title)
                 
                 if not poster_data:
-                    app_logger.debug(f"No poster found for movie: {movie_title}")
+                    app_logger.debug(f"No poster found for movie: {movie_title} (ID: {movie_id})")
                     return
 
                 # Create QPixmap from image data
@@ -118,14 +127,67 @@ class HomeWidget(BasePageWidget):
                     if not scaled_pixmap.isNull():
                         poster_label = container.findChild(QLabel)
                         poster_label.setPixmap(scaled_pixmap)
-                        app_logger.debug(f"Successfully loaded poster for: {movie_title}")
+                        app_logger.debug(f"Successfully loaded poster for: {movie_title} (ID: {movie_id})")
                     else:
                         raise ValueError("Failed to scale pixmap")
                 else:
                     raise ValueError("Failed to load pixmap from image data")
                     
             except Exception as e:
-                app_logger.error(f"Error loading poster for {movie_title}: {str(e)}")
+                app_logger.error(f"Error loading poster for {movie_title} (ID: {movie_id}): {str(e)}")
+
+        # Submit poster loading task to thread pool
+        self.thread_pool.submit(load_and_set_poster)
+        
+    def _load_tv_poster(self, tv, container):
+        tv_title = tv.get('name', 'Unknown')
+        tv_id = tv.get('id')
+        
+        # Set the title and ID immediately
+        title_label = container.findChildren(QLabel)[-1]
+        title_label.setText(tv_title)
+        container.movie_id = tv_id
+
+        def load_and_set_poster():
+            try:
+                poster_data = self.poster_downloader.get_tv_posters_by_name(tv_title)
+                
+                if not poster_data:
+                    app_logger.debug(f"No poster found for TV show: {tv_title} (ID: {tv_id})")
+                    return
+
+                pixmap = QPixmap()
+                if pixmap.loadFromData(poster_data):
+                    # Get the poster label's size
+                    poster_label = container.findChild(QLabel)
+                    label_size = poster_label.size()
+                    
+                    # Scale the pixmap to fill the label while maintaining aspect ratio
+                    scaled_pixmap = pixmap.scaled(
+                        label_size.width(),
+                        label_size.height(),
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation
+                    )
+                    
+                    # If the scaled image is larger than the label, crop it from the center
+                    if scaled_pixmap.width() > label_size.width() or scaled_pixmap.height() > label_size.height():
+                        x = (scaled_pixmap.width() - label_size.width()) // 2
+                        y = (scaled_pixmap.height() - label_size.height()) // 2
+                        scaled_pixmap = scaled_pixmap.copy(
+                            x, y, label_size.width(), label_size.height()
+                        )
+                    
+                    if not scaled_pixmap.isNull():
+                        poster_label.setPixmap(scaled_pixmap)
+                        app_logger.debug(f"Successfully loaded poster for TV show: {tv_title} (ID: {tv_id})")
+                    else:
+                        raise ValueError("Failed to scale pixmap")
+                else:
+                    raise ValueError("Failed to load pixmap from image data")
+                    
+            except Exception as e:
+                app_logger.error(f"Error loading poster for TV show {tv_title} (ID: {tv_id}): {str(e)}")
 
         # Submit poster loading task to thread pool
         self.thread_pool.submit(load_and_set_poster)
@@ -145,12 +207,59 @@ class HomeWidget(BasePageWidget):
                     
                 container = layout.itemAt(i).widget()
                 if container:
-                    # Set the movie name for the clickable container
+                    # Set both movie name and ID for the clickable container
                     container.movie_name = movie.get('title', 'Unknown')
+                    container.movie_id = movie.get('id')
                     self.thread_pool.submit(self._load_poster, movie, container)
                     
         except Exception as e:
             app_logger.error(f"Failed to load trending movies: {str(e)}")
+
+    def _load_trending_series(self):
+        try:
+            trending_series = self.tmdb.get_trending_tv()
+            if "results" not in trending_series:
+                app_logger.error("No results found in trending series response")
+                return
+
+            layout = self.ui.trendingSeriesContent.layout()
+            
+            for i, series in enumerate(trending_series["results"][:20]):
+                if i >= layout.count() - 1:
+                    break
+                    
+                container = layout.itemAt(i).widget()
+                if container:
+                    # Set both series name and ID for the clickable container
+                    container.movie_name = series.get('name', 'Unknown')
+                    container.movie_id = series.get('id')
+                    self.thread_pool.submit(self._load_tv_poster, series, container)
+                    
+        except Exception as e:
+            app_logger.error(f"Failed to load trending series: {str(e)}")
+
+    def _load_trending_anime(self):
+        try:
+            trending_anime = self.myanimelist.get_trending_anime()
+            if "results" not in trending_anime:
+                app_logger.error("No results found in trending anime response")
+                return
+
+            layout = self.ui.trendingAnimeContent.layout()
+            
+            for i, anime in enumerate(trending_anime["results"][:20]):
+                if i >= layout.count() - 1:
+                    break
+                    
+                container = layout.itemAt(i).widget()
+                if container:
+                    # Set both anime name and ID for the clickable container
+                    container.movie_name = anime.get('name', 'Unknown')
+                    container.movie_id = anime.get('id')
+                    self.thread_pool.submit(self._load_tv_poster, anime, container)
+                    
+        except Exception as e:
+            app_logger.error(f"Failed to load trending anime: {str(e)}")
 
     def on_page_deactivate(self):
         super().on_page_deactivate()
