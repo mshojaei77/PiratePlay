@@ -192,6 +192,63 @@ class HomeWidget(BasePageWidget):
         # Submit poster loading task to thread pool
         self.thread_pool.submit(load_and_set_poster)
 
+    def _load_anime_poster(self, anime, container):
+        anime_title = anime.get('name', 'Unknown')
+        anime_id = anime.get('id')
+        
+        # Set the title and ID immediately
+        title_label = container.findChildren(QLabel)[-1]
+        title_label.setText(anime_title)
+        container.movie_id = anime_id
+
+        def load_and_set_poster():
+            try:
+                # First try to get poster from MyAnimeList via poster downloader
+                poster_data = self.poster_downloader.get_anime_poster_by_name(anime_title, anime_id)
+                
+                if not poster_data:
+                    app_logger.debug(f"No MAL poster found for anime: {anime_title}, falling back to TV poster")
+                    # Fall back to TV poster method
+                    return self._load_tv_poster(anime, container)
+
+                pixmap = QPixmap()
+                if pixmap.loadFromData(poster_data):
+                    # Get the poster label's size
+                    poster_label = container.findChild(QLabel)
+                    label_size = poster_label.size()
+                    
+                    # Scale the pixmap to fill the label while maintaining aspect ratio
+                    scaled_pixmap = pixmap.scaled(
+                        label_size.width(),
+                        label_size.height(),
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation
+                    )
+                    
+                    # If the scaled image is larger than the label, crop it from the center
+                    if scaled_pixmap.width() > label_size.width() or scaled_pixmap.height() > label_size.height():
+                        x = (scaled_pixmap.width() - label_size.width()) // 2
+                        y = (scaled_pixmap.height() - label_size.height()) // 2
+                        scaled_pixmap = scaled_pixmap.copy(
+                            x, y, label_size.width(), label_size.height()
+                        )
+                    
+                    if not scaled_pixmap.isNull():
+                        poster_label.setPixmap(scaled_pixmap)
+                        app_logger.debug(f"Successfully loaded MAL poster for: {anime_title} (ID: {anime_id})")
+                    else:
+                        raise ValueError("Failed to scale pixmap")
+                else:
+                    raise ValueError("Failed to load pixmap from image data")
+                    
+            except Exception as e:
+                app_logger.error(f"Error loading MAL poster for {anime_title} (ID: {anime_id}): {str(e)}")
+                # Fall back to TV poster method
+                return self._load_tv_poster(anime, container)
+
+        # Submit poster loading task to thread pool
+        self.thread_pool.submit(load_and_set_poster)
+
     def _load_trending_movies(self):
         try:
             trending_movies = self.tmdb.get_trending_movies()
@@ -254,9 +311,11 @@ class HomeWidget(BasePageWidget):
                 container = layout.itemAt(i).widget()
                 if container:
                     # Set both anime name and ID for the clickable container
+                    
                     container.movie_name = anime.get('name', 'Unknown')
                     container.movie_id = anime.get('id')
-                    self.thread_pool.submit(self._load_tv_poster, anime, container)
+                    print(anime.get('id'))
+                    self._load_anime_poster(anime, container)
                     
         except Exception as e:
             app_logger.error(f"Failed to load trending anime: {str(e)}")

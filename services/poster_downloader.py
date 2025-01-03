@@ -11,6 +11,7 @@ import threading
 import os
 from pathlib import Path
 from services.tmdb import TMDBService
+from services.myanimelist import MyAnimeListService
 
 app_logger = logging.getLogger(__name__)
 app_logger.setLevel(logging.DEBUG)
@@ -40,6 +41,7 @@ class PosterDownloader:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.tmdb_service = TMDBService(self.TMDB_API_KEY)
+        self.myanimelist = MyAnimeListService()
 
     def get_posters_by_name(self, movie_name: str) -> bytes:
         """Get movie poster image data, trying all sources concurrently until first success"""
@@ -529,6 +531,44 @@ class PosterDownloader:
                     if not future.done():
                         future.cancel()
         return poster_data
+
+    def get_anime_poster_by_name(self, anime_name: str, anime_id: int = None) -> bytes:
+        """Get anime poster image data with caching"""
+        # Create cache key using both name and ID
+        cache_key = f"anime_poster_{anime_name}_{anime_id}" if anime_id else f"anime_poster_{anime_name}"
+        
+        # Check memory cache
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Create cache filename
+        cache_filename = self._sanitize_filename(anime_name, anime_id)
+        cache_file = self.cache_dir / f"{cache_filename}.jpg"
+
+        # Check file cache
+        if cache_file.exists():
+            return cache_file.read_bytes()
+
+        # Get poster URL from MAL
+        poster_url = self.myanimelist.get_anime_poster_by_id(anime_id) if anime_id else ""
+        
+        if not poster_url:
+            return bytes()
+
+        try:
+            # Download the image
+            response = self.session.get(poster_url, stream=True)
+            if response.ok:
+                poster_data = response.content
+                # Save to file cache
+                cache_file.write_bytes(poster_data)
+                # Save to memory cache
+                self._cache[cache_key] = poster_data
+                return poster_data
+        except Exception as e:
+            app_logger.debug(f"Error downloading anime poster: {str(e)}")
+        
+        return bytes()
 
 if __name__ == "__main__":
     # Example usage of the PosterDownloader

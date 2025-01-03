@@ -38,11 +38,19 @@ class MyAnimeListService:
             
         # Transform response to match TMDB format
         results = []
+        seen_titles = set()
         for item in response.get('data', []):
             node = item.get('node', {})
+            title = node.get('title')
+            
+            # Skip if we've already seen this title
+            if title in seen_titles:
+                continue
+                
+            seen_titles.add(title)
             results.append({
                 'id': node.get('id'),
-                'name': node.get('title'),
+                'name': title,
                 'poster_path': node.get('main_picture', {}).get('large'),
                 'vote_average': node.get('mean')
             })
@@ -124,9 +132,7 @@ class MyAnimeListService:
 if __name__ == "__main__":
     # Initialize service
     mal = MyAnimeListService()
-    
-    # Test getting top airing anime
-    print("\n=== Top Airing Anime ===")
-    top_airing = mal.get_anime_ranking(ranking_type="airing")
-    for anime in top_airing["results"]:
-        print(anime["name"])
+
+    trending = mal.get_trending_anime()
+    for anime in trending['results']:
+        print(mal.get_anime_poster_by_id(anime['id']))
