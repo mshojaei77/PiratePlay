@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC>
+    <qresource prefix="/">
+        <file>assets/icons/search.svg</file>
+        <!-- Add other icons as needed -->
+    </qresource>
+</RCC>

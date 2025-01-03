@@ -1,0 +1,123 @@
+QWidget {
+    background-color: #1E1E1E;
+    color: #FFFFFF;
+}
+
+#navigationPanel {
+    background-color: #333333;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#titleBar {
+    background-color: #333333;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+QLineEdit {
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 4px;
+    padding: 5px;
+    color: #FFFFFF;
+}
+
+QLineEdit:focus {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+QPushButton { 
+    border: none; 
+    background: none; 
+    padding: 0px; 
+    margin: 0px; 
+}
+
+QPushButton:hover { 
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+QPushButton:checked {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+}
+
+#closeButton:hover {
+    background-color: rgba(255, 0, 0, 0.7);
+    border-radius: 4px;
+}
+
+/* Settings-specific styles */
+QTabWidget::pane {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: #1E1E1E;
+}
+
+QTabWidget::tab-bar {
+    alignment: left;
+}
+
+QTabBar::tab {
+    background: #333333;
+    color: #FFFFFF;
+    padding: 8px 16px;
+    border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+QTabBar::tab:selected {
+    background: #1E1E1E;
+    border-bottom: 2px solid #FFFFFF;
+}
+
+QTabBar::tab:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+QGroupBox {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    margin-top: 1em;
+    padding-top: 1em;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 3px;
+}
+
+QSpinBox {
+    background-color: #333333;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QSpinBox::up-button, QSpinBox::down-button {
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+QComboBox {
+    background-color: #333333;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QComboBox::drop-down {
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+QComboBox::drop-down:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
